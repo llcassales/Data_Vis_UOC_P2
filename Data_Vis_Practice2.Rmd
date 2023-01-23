@@ -1,0 +1,230 @@
+---
+title: "Cost of life"
+output: 
+  html_document:
+    code_folding: show
+    theme:
+      bg: "#202123"
+      fg: "#B8BCC2"
+      primary: "#EA80FC"
+      secondary: "#00DAC6"
+      base_font:
+        google: Prompt
+      heading_font:
+        google: Proza Libre
+---
+
+
+```{r setup, include=FALSE} 
+library(flexdashboard)
+library(tidyverse)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(plotly)
+library(reshape2)
+library(gridExtra)
+library(flexdashboard)
+library(crosstalk)
+library(leaflet)
+library(DT)
+```
+
+
+
+### Dataset y workflow
+
+Datos "Global Cost of Living"
+
+-   Licencia CCO 1.0
+-   Incluye precios actuales de más de 50 productos basicos y/o servicios
+
+Proceso de creación y diseño
+
+- Uso de mapas y escalas de colores para explorar patrones geográficos de los costes de vida.
+- Uso de una paleta de colores divergentes asignando un color por producto para facilitar la interpretación de los plots.
+- Aplicación de herramientas interactivas para facilitar la navegación a lo largo de las visualizaciones, incoporar datos adicionales sin sobrecargar la imagen, permitir generar visualizaciones de datasets con gran cantidad de variables.
+
+##### Preguntas a abordar
+
+-   ¿Cuales son los paises mas caros del planeta?
+-   ¿En que paises el coste de vida es menor en proporcion al sueldo medio?
+-   ¿Que categorias de productos tienen mayor variacion entre localidades?
+-   ¿Que productos son responsables de incrementar mas los gastos de vida?
+
+
+
+### Most expensive countries
+
+```{r, echo=FALSE}
+
+data <- read.csv("cost-of-living_v2.csv")
+
+col_index <- read.delim("Column_index.txt", sep= "\t", header = TRUE)
+
+names(data) <- col_index$Descripción
+
+data_subset <- data[, c(1:2, 10:25, 31,38:41, 44, 50, 
+                            53, 54, 56, 57)]
+
+names(data_subset) <- c("City", "Country", "Water (0.33L)", "Milk (1L)","Bread (500g)", "Rice (1 Kg)", "Eggs (12 U)", 
+                        "Cheese (1 Kg)", "Chicken (1 Kg)", "Beef (1 Kg)", "Apples (1 Kg)", "Banana (1 Kg)",
+                        "Oranges (1 Kg)", "Tomato (1 Kg)", 
+                        "Potatoes (1 Kg)", "Onion (1 Kg)", "Lettuce (1U)", "Water (1.5L)", "Transport monthly pass", "Services (Gas/electricity/water...)",
+                        "Call (1 min)", "Internet (60 Mbps)", "Gym (monthly)", "Kinder garden (montly)", 
+                        "Apartment 1 room (monthly)", "Apartment 3 room (monthly)", "Sqmt price", "Salary (monthly)",
+                        "Mortgage rate")
+
+#1. Create a variable with the cost of life per city 
+data_subset$cost_life <- rowSums(data_subset[,c(3:25)])
+
+#2. Create a variable representing the proportion of salary destinated to cover basic cost of life
+data_subset$cost.salary <- data_subset$cost_life/data_subset$`Salary (monthly)`                                             
+
+
+#3. Plot cost of life per country
+#Create a subset after removing rows with NA
+data_subset_NArm <- data_subset[complete.cases(data_subset),]
+
+cost_country_absolut <- aggregate(data_subset_NArm$cost_life, list(data_subset_NArm$Country), FUN=mean, na.action = na.omit) 
+vect_count <- structure(cost_country_absolut$x, .Names = as.character(cost_country_absolut$Group.1))
+
+g <- list(scope = 'world')
+cost <- plot_geo(cost_country_absolut) %>%
+  add_trace(z = vect_count, locationmode = "country names", locations = ~Group.1,
+            color = ~x, colors = 'Purples') %>%
+  colorbar(title = "Absolut cost of life by country ($)") %>%
+  layout(geo = g)
+cost
+
+```
+
+
+
+
+### Proportion of the salary to cover basic expenses
+
+```{r, echo=FALSE, warning=FALSE}
+library(RJSONIO)
+test <- data_subset_NArm
+nrow <- nrow(test)
+counter <- 1
+test$lon[counter] <- 0
+test$lat[counter] <- 0
+while (counter <= nrow){
+  CityName <- gsub(' ','%20',test$City[counter]) #remove space for URLs
+  CountryCode <- test$Country[counter]
+  url <- paste(
+    "http://nominatim.openstreetmap.org/search?city="
+    , CityName
+    , "&countrycodes="
+    , CountryCode
+    , "&limit=9&format=json"
+    , sep="")
+  x <- fromJSON(url)
+  if(is.vector(x)){
+    test$lon[counter] <- x[[1]]$lon
+    test$lat[counter] <- x[[1]]$lat    
+  }
+  counter <- counter + 1
+}
+
+# Create a filter input
+
+test$lat <- as.numeric(test$lat)
+test$lon <- as.numeric(test$lon)
+sd <- SharedData$new(test)
+getColor <- function(test) {
+  sapply(test$cost.salary, function(cost.salary) {
+  if(cost.salary <= 1) {
+    "green"
+  } else if(cost.salary <= 5) {
+    "orange"
+  } else {
+    "red"
+  } })
+}
+icons <- awesomeIcons(
+  icon = 'ios-close',
+  iconColor = 'black',
+  library = 'ion',
+  markerColor = getColor(test)
+)
+bscols(filter_slider("cost.salary", "Proportion of salary to basic cost", sd, column=~cost.salary, step= 0.1, min=0, max=26))
+```
+
+
+```{r, echo=FALSE, warning=FALSE}
+sd %>% leaflet() %>% addTiles() %>% addAwesomeMarkers(
+  lng = ~lon,
+  lat = ~lat,
+  icon=icons, 
+  label = ~paste0(City, " (click for info)"),
+  popup = 
+    ~paste0(
+      "City: ", test$City, 
+      "<br>Salary: ", test$`Salary (monthly)`,
+      "<br>Cost/Salary: ", test$cost.salary))
+
+datatable(sd, extensions="Scroller", style="bootstrap", class="compact", width="100%",
+                 options=list(deferRender=TRUE, scrollY=300, scroller=TRUE))
+
+
+```
+
+
+### Variation of product prices across cities
+
+```{r, echo=FALSE, warning=FALSE}
+
+#Create a vector with one color by product 
+library(RColorBrewer)
+n <- 21
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+names(col_vector) <- levels(factor(c(colnames(test[-c(1,2, 25:33)]))))
+
+# Coefficient of variation
+CV <- sapply(test[,-c(1,2, 25:33)], function(x) sd(x) / mean(x) * 100)
+CV_Product <- as_tibble(CV)
+CV_name <-as_tibble(colnames(test[,-c(1,2, 25:33)]))
+CV <- data.frame(CV_name, CV_Product)
+names(CV) <- c("Product", "CV")
+CV_plot <- ggplot(CV, aes(Product, CV, color = Product)) + geom_point() + 
+  scale_color_manual(name= "Product",values = col_vector) +
+  ylab("Coefficient of variation") + theme_classic() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.position = "none") + ggtitle("Variation of prices across localities (Coefficient of variation)")
+ggplotly(CV_plot)
+```
+
+```{r, echo=FALSE, warning=FALSE}
+
+# Boxplot
+test_melt <- melt(test[,-c(25:33)], id= c("City", "Country"))
+test_melt <- test_melt[order(test_melt$variable),]
+Price_boxplot <- ggplot(data = test_melt, aes(x=variable, y=log(value), fill=variable)) + geom_boxplot() + 
+  scale_fill_manual(name= "Product",values = col_vector) + theme_classic() +
+  theme(axis.text.x = element_blank()) +
+  ggtitle("Variation of prices across localities (Raw price)")
+ggplotly(Price_boxplot)
+
+
+```
+
+### Increment of cost of life due to products
+```{r, echo=FALSE, warning=FALSE}
+
+#Productos responsables de incrementar coste de vida
+
+Price_scatter <- test[,-c(25:30,32:33)] %>%
+  gather(-c(City, Country, cost.salary), key = "var", value = "value") %>%
+  ggplot(aes(x = value, y = cost.salary)) +
+    geom_point(aes(color= var)) +
+    facet_wrap(~ var, scales = "free") +
+    theme_bw()+ 
+  scale_color_manual(name= "Product",values = col_vector)
+
+ggplotly(Price_scatter)
+
+
+```
